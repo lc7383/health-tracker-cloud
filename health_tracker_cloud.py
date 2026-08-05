@@ -52,20 +52,47 @@ except Exception:
     st.stop()
 
 
-# ── Login (name only, no password) ──────────────────────────────────
+# ── Login (pick existing name, or add a new one — no password) ─────
+def get_existing_users():
+    resp = supabase.table("users").select("user_name").order("user_name").execute()
+    return [row["user_name"] for row in resp.data] if resp.data else []
+
+
+def register_user(name):
+    # upsert so re-selecting an existing name never errors
+    supabase.table("users").upsert({"user_name": name}).execute()
+
+
 if "user_name" not in st.session_state:
     st.session_state["user_name"] = ""
 
 if not st.session_state["user_name"]:
     st.title("🩺 Health Tracker")
-    st.write("Enter your name to view or start your own log.")
     st.caption(
         "⚠️ This is a shared app for a small trusted group. There's no password — "
         "anyone who knows your name could see your entries. Use a nickname if you'd prefer."
     )
-    name_input = st.text_input("Your name")
-    if st.button("Continue") and name_input.strip():
-        st.session_state["user_name"] = name_input.strip()
+
+    existing_users = get_existing_users()
+    choice = st.selectbox(
+        "Who are you?",
+        options=existing_users + ["➕ New user..."],
+        index=None,
+        placeholder="Select your name",
+    )
+
+    chosen_name = None
+    if choice == "➕ New user...":
+        new_name = st.text_input("Enter your name")
+        if st.button("Continue") and new_name.strip():
+            chosen_name = new_name.strip()
+    elif choice:
+        if st.button("Continue"):
+            chosen_name = choice
+
+    if chosen_name:
+        register_user(chosen_name)
+        st.session_state["user_name"] = chosen_name
         st.rerun()
     st.stop()
 
