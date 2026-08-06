@@ -4,7 +4,8 @@ health_tracker_cloud.py
 SHARED version of the health tracker, backed by Supabase (free hosted Postgres)
 so data survives Streamlit Cloud restarts and multiple people can use it.
 
-Login is a simple name entry (no password) - each person's data is filtered
+Login is a real username + password, hashed and salted before being stored
+in Supabase (never stored in plain text). Each person's data is filtered
 by the name they type. This is NOT strong security: anyone who knows or
 guesses another person's name could view/edit that person's entries. It's
 meant for a small trusted group (family/friends), not a public product.
@@ -30,6 +31,8 @@ import pandas as pd
 import plotly.express as px
 from datetime import date
 from supabase import create_client
+import hashlib
+import secrets as secrets_module
 
 st.set_page_config(page_title="Health Tracker (Shared)", page_icon="🩺", layout="wide")
 
@@ -52,15 +55,39 @@ except Exception:
     st.stop()
 
 
-# ── Login (pick existing name, or add a new one — no password) ─────
+# ── Login (username + password) ─────────────────────────────────────
+def hash_password(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+
+
 def get_existing_users():
     resp = supabase.table("users").select("user_name").order("user_name").execute()
     return [row["user_name"] for row in resp.data] if resp.data else []
 
 
-def register_user(name):
-    # upsert so re-selecting an existing name never errors
-    supabase.table("users").upsert({"user_name": name}).execute()
+def register_user(name, password):
+    salt = secrets_module.token_hex(16)
+    pw_hash = hash_password(password, salt)
+    supabase.table("users").upsert(
+        {"user_name": name, "password_hash": pw_hash, "salt": salt}
+    ).execute()
+
+
+def verify_user(name, password):
+    resp = supabase.table("users").select("password_hash, salt").eq("user_name", name).execute()
+    if not resp.data:
+        return False
+    row = resp.data[0]
+    if not row["salt"] or not row["password_hash"]:
+        return False
+    return hash_password(password, row["salt"]) == row["password_hash"]
+
+
+def needs_password_setup(name):
+    resp = supabase.table("users").select("password_hash").eq("user_name", name).execute()
+    if not resp.data:
+        return False
+    return not resp.data[0]["password_hash"]
 
 
 if "user_name" not in st.session_state:
@@ -68,10 +95,7 @@ if "user_name" not in st.session_state:
 
 if not st.session_state["user_name"]:
     st.title("🩺 Health Tracker")
-    st.caption(
-        "⚠️ This is a shared app for a small trusted group. There's no password — "
-        "anyone who knows your name could see your entries. Use a nickname if you'd prefer."
-    )
+    st.caption("Log in with your name and password, or create a new account below.")
 
     existing_users = get_existing_users()
     choice = st.selectbox(
@@ -81,19 +105,43 @@ if not st.session_state["user_name"]:
         placeholder="Select your name",
     )
 
-    chosen_name = None
     if choice == "➕ New user...":
-        new_name = st.text_input("Enter your name")
-        if st.button("Continue") and new_name.strip():
-            chosen_name = new_name.strip()
+        new_name = st.text_input("Choose a username")
+        new_pw = st.text_input("Choose a password", type="password")
+        confirm_pw = st.text_input("Confirm password", type="password")
+        if st.button("Create account"):
+            if not new_name.strip() or not new_pw:
+                st.error("Please enter a username and password.")
+            elif new_name.strip() in existing_users:
+                st.error("That username is already taken. Pick a different one.")
+            elif new_pw != confirm_pw:
+                st.error("Passwords don't match.")
+            else:
+                register_user(new_name.strip(), new_pw)
+                st.session_state["user_name"] = new_name.strip()
+                st.rerun()
     elif choice:
-        if st.button("Continue"):
-            chosen_name = choice
-
-    if chosen_name:
-        register_user(chosen_name)
-        st.session_state["user_name"] = chosen_name
-        st.rerun()
+        if needs_password_setup(choice):
+            st.info(f"'{choice}' doesn't have a password yet. Set one now to secure this account.")
+            new_pw = st.text_input("New password", type="password")
+            confirm_pw = st.text_input("Confirm password", type="password")
+            if st.button("Set password"):
+                if not new_pw:
+                    st.error("Please enter a password.")
+                elif new_pw != confirm_pw:
+                    st.error("Passwords don't match.")
+                else:
+                    register_user(choice, new_pw)
+                    st.session_state["user_name"] = choice
+                    st.rerun()
+        else:
+            pw = st.text_input("Password", type="password")
+            if st.button("Log in"):
+                if verify_user(choice, pw):
+                    st.session_state["user_name"] = choice
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
     st.stop()
 
 user = st.session_state["user_name"]
