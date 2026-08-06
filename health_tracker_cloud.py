@@ -358,11 +358,23 @@ with tabs[5]:
     with c2:
         f_description = pick_or_add("Description", get_distinct_values("food", "description"), "f_desc")
         if f_description and st.session_state.get("f_last_desc") != f_description:
-            past_cal = get_last_value("food", "description", f_description, "calories")
-            if past_cal is not None:
-                st.session_state["f_calories"] = float(past_cal)
+            for col, skey in [("calories", "f_calories"), ("protein_g", "f_protein"),
+                               ("fiber_g", "f_fiber"), ("sugar_g", "f_sugar"),
+                               ("carbs_g", "f_carbs"), ("fat_g", "f_fat")]:
+                past_val = get_last_value("food", "description", f_description, col)
+                if past_val is not None:
+                    st.session_state[skey] = float(past_val)
             st.session_state["f_last_desc"] = f_description
         f_calories = st.number_input("Calories (optional)", min_value=0.0, step=10.0, key="f_calories")
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        f_protein = st.number_input("Protein (g, optional)", min_value=0.0, step=1.0, key="f_protein")
+        f_carbs = st.number_input("Carbs (g, optional)", min_value=0.0, step=1.0, key="f_carbs")
+    with c4:
+        f_fiber = st.number_input("Fiber (g, optional)", min_value=0.0, step=1.0, key="f_fiber")
+        f_fat = st.number_input("Fat (g, optional)", min_value=0.0, step=1.0, key="f_fat")
+    with c5:
+        f_sugar = st.number_input("Sugar (g, optional)", min_value=0.0, step=1.0, key="f_sugar")
     f_notes = st.text_input("Notes", key="f_notes")
     if st.button("Save", key="f_save"):
         if not f_description:
@@ -370,9 +382,15 @@ with tabs[5]:
         else:
             insert_row("food", {"log_date": str(f_date), "meal": f_meal,
                                  "description": f_description,
-                                 "calories": f_calories or None, "notes": f_notes})
+                                 "calories": f_calories or None,
+                                 "protein_g": f_protein or None,
+                                 "fiber_g": f_fiber or None,
+                                 "sugar_g": f_sugar or None,
+                                 "carbs_g": f_carbs or None,
+                                 "fat_g": f_fat or None, "notes": f_notes})
             st.success("Saved.")
-            for k in ["f_desc_select", "f_desc_new", "f_calories", "f_notes", "f_last_desc"]:
+            for k in ["f_desc_select", "f_desc_new", "f_calories", "f_protein", "f_fiber",
+                      "f_sugar", "f_carbs", "f_fat", "f_notes", "f_last_desc"]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
