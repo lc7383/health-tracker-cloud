@@ -209,12 +209,12 @@ def insert_row(table, row: dict):
     supabase.table(table).insert(row).execute()
 
 
-def read_table(table):
+def read_table(table, order_col="log_date"):
     resp = (
         supabase.table(table)
         .select("*")
         .eq("user_name", user)
-        .order("log_date", desc=True)
+        .order(order_col, desc=True)
         .execute()
     )
     return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
@@ -621,7 +621,7 @@ with st.sidebar:
 # ── App layout ───────────────────────────────────────────────────────
 st.title("🩺 Personal Health Tracker (Shared)")
 
-tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "🍽️ Food", "💊 Vitamins", "🩹 Symptoms", "🧘 Self-Care"])
+tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "🍽️ Food", "💊 Vitamins", "🩹 Symptoms", "🧘 Self-Care", "🏥 Visits"])
 
 with tabs[0]:
     st.subheader("Last 30 Days")
@@ -886,3 +886,51 @@ with tabs[8]:
     df = read_table("self_care")
     st.dataframe(df, use_container_width=True)
     delete_ui("self_care", df)
+
+with tabs[9]:
+    st.subheader("Log a Health Visit")
+    c1, c2 = st.columns(2)
+    with c1:
+        hv_date = st.date_input("Visit date", value=date.today(), key="hv_date")
+        hv_type = pick_or_add("Provider type (e.g. Chiropractor, Dentist, Doctor)",
+                               get_distinct_values("health_visits", "provider_type"), "hv_type")
+        hv_name = pick_or_add("Provider / practice name",
+                               get_distinct_values("health_visits", "provider_name"), "hv_name")
+    with c2:
+        hv_website = st.text_input("Website", key="hv_website")
+        hv_phone = st.text_input("Phone", key="hv_phone")
+        hv_address = st.text_input("Address", key="hv_address")
+    hv_notes = st.text_input("Notes (reason for visit, what they said, etc.)", key="hv_notes")
+    hv_has_next = st.checkbox("Schedule a next appointment?", key="hv_has_next")
+    hv_next = st.date_input("Next appointment date", key="hv_next") if hv_has_next else None
+    if st.button("Save", key="hv_save"):
+        if not hv_type and not hv_name:
+            st.error("Please enter at least a provider type or name.")
+        else:
+            insert_row("health_visits", {
+                "visit_date": str(hv_date), "provider_type": hv_type, "provider_name": hv_name,
+                "website": hv_website, "phone": hv_phone, "address": hv_address,
+                "notes": hv_notes, "next_appointment": str(hv_next) if hv_next else None,
+            })
+            st.success("Saved.")
+            for k in ["hv_type_select", "hv_type_new", "hv_name_select", "hv_name_new",
+                      "hv_website", "hv_phone", "hv_address", "hv_notes", "hv_has_next", "hv_next"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    df = read_table("health_visits", order_col="visit_date")
+
+    upcoming = df.copy()
+    if not upcoming.empty and "next_appointment" in upcoming.columns:
+        upcoming["next_appointment"] = pd.to_datetime(upcoming["next_appointment"], errors="coerce")
+        upcoming = upcoming[upcoming["next_appointment"].notna() & (upcoming["next_appointment"].dt.date >= date.today())]
+        if not upcoming.empty:
+            st.markdown("**📅 Upcoming appointments:**")
+            st.dataframe(
+                upcoming[["next_appointment", "provider_type", "provider_name"]].sort_values("next_appointment"),
+                use_container_width=True, hide_index=True,
+            )
+
+    st.markdown("**All visits:**")
+    st.dataframe(df, use_container_width=True)
+    delete_ui("health_visits", df)
