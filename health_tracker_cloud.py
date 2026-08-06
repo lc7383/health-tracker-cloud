@@ -164,6 +164,38 @@ def read_table(table):
     return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
 
 
+def get_distinct_values(table, column):
+    resp = supabase.table(table).select(column).eq("user_name", user).execute()
+    if not resp.data:
+        return []
+    values = {row[column] for row in resp.data if row.get(column)}
+    return sorted(values)
+
+
+def get_last_value(table, match_column, match_value, return_column):
+    resp = (
+        supabase.table(table)
+        .select(return_column)
+        .eq("user_name", user)
+        .eq(match_column, match_value)
+        .order("log_date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if resp.data and resp.data[0].get(return_column) is not None:
+        return resp.data[0][return_column]
+    return None
+
+
+def pick_or_add(label, options, key):
+    """Dropdown of past values plus an inline 'add new' text field. Returns the chosen/typed string."""
+    choice = st.selectbox(label, options=options + ["➕ New..."], index=None,
+                          placeholder=f"Select or add {label.lower()}", key=f"{key}_select")
+    if choice == "➕ New...":
+        return st.text_input(f"New {label.lower()}", key=f"{key}_new")
+    return choice or ""
+
+
 def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).eq("user_name", user).execute()
 
@@ -263,19 +295,23 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("Log Exercise")
-    with st.form("exercise_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            e_date = st.date_input("Date", value=date.today(), key="e_date")
-            e_activity = st.text_input("Activity (e.g. Running, Yoga, Weights)")
-            e_duration = st.number_input("Duration (minutes)", min_value=0.0, step=5.0)
-        with c2:
-            e_intensity = st.selectbox("Intensity", ["Low", "Moderate", "High"])
-            e_notes = st.text_input("Notes", key="e_notes")
-        if st.form_submit_button("Save"):
+    c1, c2 = st.columns(2)
+    with c1:
+        e_date = st.date_input("Date", value=date.today(), key="e_date")
+        e_activity = pick_or_add("Activity", get_distinct_values("exercise", "activity"), "e_activity")
+        e_duration = st.number_input("Duration (minutes)", min_value=0.0, step=5.0, key="e_duration")
+    with c2:
+        e_intensity = st.selectbox("Intensity", ["Low", "Moderate", "High"], key="e_intensity")
+        e_notes = st.text_input("Notes", key="e_notes")
+    if st.button("Save", key="e_save"):
+        if not e_activity:
+            st.error("Please select or add an activity.")
+        else:
             insert_row("exercise", {"log_date": str(e_date), "activity": e_activity,
                                      "duration_min": e_duration, "intensity": e_intensity, "notes": e_notes})
             st.success("Saved.")
+            for k in ["e_activity_select", "e_activity_new", "e_duration", "e_notes"]:
+                st.session_state.pop(k, None)
             st.rerun()
     df = read_table("exercise")
     st.dataframe(df, use_container_width=True)
@@ -315,20 +351,29 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Log Food")
-    with st.form("food_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            f_date = st.date_input("Date", value=date.today(), key="f_date")
-            f_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"])
-        with c2:
-            f_description = st.text_input("What did you eat?")
-            f_calories = st.number_input("Calories (optional)", min_value=0.0, step=10.0)
-        f_notes = st.text_input("Notes", key="f_notes")
-        if st.form_submit_button("Save"):
+    c1, c2 = st.columns(2)
+    with c1:
+        f_date = st.date_input("Date", value=date.today(), key="f_date")
+        f_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"], key="f_meal")
+    with c2:
+        f_description = pick_or_add("Description", get_distinct_values("food", "description"), "f_desc")
+        if f_description and st.session_state.get("f_last_desc") != f_description:
+            past_cal = get_last_value("food", "description", f_description, "calories")
+            if past_cal is not None:
+                st.session_state["f_calories"] = float(past_cal)
+            st.session_state["f_last_desc"] = f_description
+        f_calories = st.number_input("Calories (optional)", min_value=0.0, step=10.0, key="f_calories")
+    f_notes = st.text_input("Notes", key="f_notes")
+    if st.button("Save", key="f_save"):
+        if not f_description:
+            st.error("Please select or add a description.")
+        else:
             insert_row("food", {"log_date": str(f_date), "meal": f_meal,
                                  "description": f_description,
                                  "calories": f_calories or None, "notes": f_notes})
             st.success("Saved.")
+            for k in ["f_desc_select", "f_desc_new", "f_calories", "f_notes", "f_last_desc"]:
+                st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
     st.dataframe(df, use_container_width=True)
@@ -336,19 +381,23 @@ with tabs[5]:
 
 with tabs[6]:
     st.subheader("Log Vitamins / Supplements")
-    with st.form("vitamins_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            v_date = st.date_input("Date", value=date.today(), key="v_date")
-            v_name = st.text_input("Vitamin / Supplement name (e.g. Vitamin D, Magnesium)")
-        with c2:
-            v_dose = st.text_input("Dose (e.g. 2000 IU, 400mg)")
-            v_taken = st.checkbox("Taken", value=True)
-        v_notes = st.text_input("Notes", key="v_notes")
-        if st.form_submit_button("Save"):
+    c1, c2 = st.columns(2)
+    with c1:
+        v_date = st.date_input("Date", value=date.today(), key="v_date")
+        v_name = pick_or_add("Vitamin / Supplement name", get_distinct_values("vitamins", "vitamin_name"), "v_name")
+    with c2:
+        v_dose = pick_or_add("Dose", get_distinct_values("vitamins", "dose"), "v_dose")
+        v_taken = st.checkbox("Taken", value=True, key="v_taken")
+    v_notes = st.text_input("Notes", key="v_notes")
+    if st.button("Save", key="v_save"):
+        if not v_name:
+            st.error("Please select or add a vitamin/supplement name.")
+        else:
             insert_row("vitamins", {"log_date": str(v_date), "vitamin_name": v_name,
                                      "dose": v_dose, "taken": v_taken, "notes": v_notes})
             st.success("Saved.")
+            for k in ["v_name_select", "v_name_new", "v_dose_select", "v_dose_new", "v_notes"]:
+                st.session_state.pop(k, None)
             st.rerun()
     df = read_table("vitamins")
     st.dataframe(df, use_container_width=True)
