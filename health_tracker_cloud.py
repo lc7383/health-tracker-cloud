@@ -29,10 +29,11 @@ Usage:
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from supabase import create_client
 import hashlib
 import secrets as secrets_module
+import extra_streamlit_components as stx
 
 st.set_page_config(page_title="Health Tracker (Shared)", page_icon="🩺", layout="wide")
 
@@ -53,6 +54,57 @@ except Exception:
         "to your Streamlit Secrets (see the setup notes at the top of this file)."
     )
     st.stop()
+
+
+# ── Persistent login (cookie-based, so reopening the app doesn't log you out) ─
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager(key="health_tracker_cookies")
+
+
+cookie_manager = get_cookie_manager()
+COOKIE_NAME = "ht_session_token"
+SESSION_DAYS = 30
+
+
+def create_session(name):
+    """Generate a long-lived token, store it against the user, and set it as a browser cookie."""
+    token = secrets_module.token_hex(32)
+    expiry = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
+    supabase.table("users").update(
+        {"session_token": token, "session_expiry": expiry}
+    ).eq("user_name", name).execute()
+    cookie_manager.set(
+        COOKIE_NAME, token,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS),
+        key="set_session_cookie",
+    )
+
+
+def clear_session(name):
+    supabase.table("users").update(
+        {"session_token": None, "session_expiry": None}
+    ).eq("user_name", name).execute()
+    cookie_manager.delete(COOKIE_NAME, key="delete_session_cookie")
+
+
+def resolve_user_from_cookie():
+    token = cookie_manager.get(COOKIE_NAME)
+    if not token:
+        return None
+    resp = supabase.table("users").select("user_name, session_expiry").eq("session_token", token).execute()
+    if not resp.data:
+        return None
+    row = resp.data[0]
+    if not row.get("session_expiry"):
+        return None
+    try:
+        expiry = datetime.fromisoformat(row["session_expiry"])
+    except ValueError:
+        return None
+    if datetime.now(timezone.utc) > expiry:
+        return None
+    return row["user_name"]
 
 
 # ── Login (username + password) ─────────────────────────────────────
@@ -93,6 +145,12 @@ def needs_password_setup(name):
 if "user_name" not in st.session_state:
     st.session_state["user_name"] = ""
 
+# Try to auto-login from a remembered cookie before showing the login screen
+if not st.session_state["user_name"]:
+    remembered = resolve_user_from_cookie()
+    if remembered:
+        st.session_state["user_name"] = remembered
+
 if not st.session_state["user_name"]:
     st.title("🩺 Health Tracker")
     st.caption("Log in with your name and password, or create a new account below.")
@@ -118,6 +176,7 @@ if not st.session_state["user_name"]:
                 st.error("Passwords don't match.")
             else:
                 register_user(new_name.strip(), new_pw)
+                create_session(new_name.strip())
                 st.session_state["user_name"] = new_name.strip()
                 st.rerun()
     elif choice:
@@ -132,12 +191,14 @@ if not st.session_state["user_name"]:
                     st.error("Passwords don't match.")
                 else:
                     register_user(choice, new_pw)
+                    create_session(choice)
                     st.session_state["user_name"] = choice
                     st.rerun()
         else:
             pw = st.text_input("Password", type="password")
             if st.button("Log in"):
                 if verify_user(choice, pw):
+                    create_session(choice)
                     st.session_state["user_name"] = choice
                     st.rerun()
                 else:
@@ -267,6 +328,15 @@ def food_edit_ui(df):
         return
     with st.expander("Edit a food entry"):
         row_id = st.number_input("Row ID to edit", min_value=0, step=1, key="edit_food_id")
+
+        # If the selected row changed, clear stale widget values so fields reload fresh
+        if st.session_state.get("edit_food_loaded_id") != row_id:
+            for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+                      "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
+                      "edit_food_sodium", "edit_food_notes"]:
+                st.session_state.pop(k, None)
+            st.session_state["edit_food_loaded_id"] = row_id
+
         if row_id in df["id"].values:
             row = df[df["id"] == row_id].iloc[0]
 
@@ -292,6 +362,7 @@ def food_edit_ui(df):
             e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
             e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_food_notes")
 
+            st.caption("This updates the existing entry in place — it will NOT create a new food log entry.")
             if st.button("Update entry", key="update_food_btn"):
                 update_row("food", int(row_id), {
                     "meal": e_meal, "description": e_desc,
@@ -301,6 +372,10 @@ def food_edit_ui(df):
                     "sodium_mg": e_sodium or None, "notes": e_notes,
                 })
                 st.success(f"Updated row {row_id}.")
+                for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+                          "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
+                          "edit_food_sodium", "edit_food_notes", "edit_food_loaded_id"]:
+                    st.session_state.pop(k, None)
                 st.rerun()
         elif row_id:
             st.error("That ID isn't in your entries.")
@@ -309,7 +384,9 @@ def food_edit_ui(df):
 # ── Sidebar ──────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(f"**Logged in as:** {user}")
+    st.caption(f"You'll stay logged in on this device for {SESSION_DAYS} days.")
     if st.button("Switch user"):
+        clear_session(user)
         st.session_state["user_name"] = ""
         st.rerun()
 
