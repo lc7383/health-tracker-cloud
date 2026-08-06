@@ -296,6 +296,123 @@ def render_food_summary(food_df):
             )
 
 
+def render_exercise_summary(exercise_df):
+    st.subheader("🏃 Exercise Summary")
+    if exercise_df.empty:
+        st.caption("No exercise logged yet.")
+        return
+
+    df = exercise_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    df["duration_min"] = pd.to_numeric(df["duration_min"], errors="coerce")
+    df["activity"] = df["activity"].fillna("(unspecified)")
+    df["intensity"] = df["intensity"].fillna("(unspecified)")
+
+    # Overall totals (all activities combined)
+    daily_total = (
+        df.groupby(df["log_date"].dt.date)["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"log_date": "Date"})
+        .sort_values("Date", ascending=False)
+    )
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly_total = (
+        df.groupby("week_start")["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"week_start": "Week of"})
+        .sort_values("Week of", ascending=False)
+    )
+
+    # Breakdown by activity + intensity
+    daily_breakdown = (
+        df.groupby([df["log_date"].dt.date, "activity", "intensity"])["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"log_date": "Date", "activity": "Activity", "intensity": "Intensity"})
+        .sort_values(["Date", "Activity", "Intensity"], ascending=[False, True, True])
+    )
+
+    weekly_breakdown = (
+        df.groupby(["week_start", "activity", "intensity"])["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"week_start": "Week of", "activity": "Activity", "intensity": "Intensity"})
+        .sort_values(["Week of", "Activity", "Intensity"], ascending=[False, True, True])
+    )
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.markdown("**Total (all activities):**")
+        st.dataframe(daily_total, use_container_width=True, hide_index=True)
+        if len(daily_total) > 1:
+            st.plotly_chart(
+                px.bar(daily_total.sort_values("Date"), x="Date", y="Total Minutes", title="Daily Exercise Minutes"),
+                use_container_width=True,
+            )
+        st.markdown("**Breakdown by activity & intensity:**")
+        st.dataframe(daily_breakdown, use_container_width=True, hide_index=True)
+    with weekly_tab:
+        st.markdown("**Total (all activities):**")
+        st.dataframe(weekly_total, use_container_width=True, hide_index=True)
+        if len(weekly_total) > 1:
+            st.plotly_chart(
+                px.bar(weekly_total.sort_values("Week of"), x="Week of", y="Total Minutes", title="Weekly Exercise Minutes"),
+                use_container_width=True,
+            )
+        st.markdown("**Breakdown by activity & intensity:**")
+        st.dataframe(weekly_breakdown, use_container_width=True, hide_index=True)
+
+
+def render_sleep_summary(sleep_df):
+    st.subheader("😴 Sleep Summary")
+    if sleep_df.empty:
+        st.caption("No sleep logged yet.")
+        return
+
+    df = sleep_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    df["hours"] = pd.to_numeric(df["hours"], errors="coerce")
+    df["quality"] = pd.to_numeric(df["quality"], errors="coerce")
+
+    daily = (
+        df.groupby(df["log_date"].dt.date)
+        .agg(Entries=("hours", "count"), **{"Total Hours": ("hours", "sum"), "Avg Quality": ("quality", "mean")})
+        .reset_index()
+        .rename(columns={"log_date": "Date"})
+        .sort_values("Date", ascending=False)
+    )
+    daily["Avg Quality"] = daily["Avg Quality"].round(1)
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly = (
+        df.groupby("week_start")
+        .agg(Nights=("hours", "count"), **{"Total Hours": ("hours", "sum"), "Avg Quality": ("quality", "mean")})
+        .reset_index()
+        .rename(columns={"week_start": "Week of"})
+        .sort_values("Week of", ascending=False)
+    )
+    weekly["Avg Quality"] = weekly["Avg Quality"].round(1)
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.dataframe(daily, use_container_width=True, hide_index=True)
+        if len(daily) > 1:
+            st.plotly_chart(
+                px.bar(daily.sort_values("Date"), x="Date", y="Total Hours", title="Daily Sleep Hours"),
+                use_container_width=True,
+            )
+    with weekly_tab:
+        st.dataframe(weekly, use_container_width=True, hide_index=True)
+        if len(weekly) > 1:
+            st.plotly_chart(
+                px.bar(weekly.sort_values("Week of"), x="Week of", y="Total Hours", title="Weekly Sleep Hours"),
+                use_container_width=True,
+            )
+
+
 def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).eq("user_name", user).execute()
 
@@ -424,13 +541,7 @@ with tabs[0]:
         if not weight_df.empty:
             st.plotly_chart(px.line(weight_df.sort_values("log_date"), x="log_date", y="weight_lbs",
                                      title="Weight Trend", markers=True), use_container_width=True)
-        if not exercise_df.empty:
-            st.plotly_chart(px.bar(exercise_df, x="log_date", y="duration_min", color="activity",
-                                    title="Exercise by Activity Type"), use_container_width=True)
     with c2:
-        if not sleep_df.empty:
-            st.plotly_chart(px.bar(sleep_df.sort_values("log_date"), x="log_date", y="hours",
-                                    title="Sleep by Day"), use_container_width=True)
         if not water_df.empty:
             st.plotly_chart(px.bar(water_df.sort_values("log_date"), x="log_date", y="ounces",
                                     title="Water by Day"), use_container_width=True)
@@ -440,6 +551,8 @@ with tabs[0]:
         st.dataframe(vitamins_df.head(10), use_container_width=True)
 
     render_food_summary(food_df)
+    render_exercise_summary(exercise_df)
+    render_sleep_summary(sleep_df)
 
 with tabs[1]:
     st.subheader("Log Weight / Measurements")
