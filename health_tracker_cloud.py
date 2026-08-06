@@ -57,12 +57,7 @@ except Exception:
 
 
 # ── Persistent login (cookie-based, so reopening the app doesn't log you out) ─
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager(key="health_tracker_cookies")
-
-
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager(key="health_tracker_cookies")
 COOKIE_NAME = "ht_session_token"
 SESSION_DAYS = 30
 
