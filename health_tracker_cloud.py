@@ -304,6 +304,11 @@ def update_row(table, row_id, values: dict):
     supabase.table(table).update(values).eq("id", row_id).eq("user_name", user).execute()
 
 
+def bulk_update_food_by_description(description, values: dict):
+    """Apply corrected macro values to every past entry with this same description."""
+    supabase.table("food").update(values).eq("user_name", user).eq("description", description).execute()
+
+
 def delete_ui(table, df):
     if df.empty:
         return
@@ -540,22 +545,33 @@ with tabs[5]:
         f_sugar = st.number_input("Sugar (g, optional)", min_value=0.0, step=1.0, key="f_sugar")
         f_sodium = st.number_input("Sodium (mg, optional)", min_value=0.0, step=10.0, key="f_sodium")
     f_notes = st.text_input("Notes", key="f_notes")
+    f_apply_all = st.checkbox(
+        "Also fix all previous entries of this food with these values",
+        key="f_apply_all",
+        help="Use this if you're correcting a mistake (like wrong calories) — it will update every past entry with this same description, not just today's.",
+    )
     if st.button("Save", key="f_save"):
         if not f_description:
             st.error("Please select or add a description.")
         else:
+            macro_values = {
+                "calories": f_calories or None,
+                "protein_g": f_protein or None,
+                "fiber_g": f_fiber or None,
+                "sugar_g": f_sugar or None,
+                "carbs_g": f_carbs or None,
+                "fat_g": f_fat or None,
+                "sodium_mg": f_sodium or None,
+            }
             insert_row("food", {"log_date": str(f_date), "meal": f_meal,
-                                 "description": f_description,
-                                 "calories": f_calories or None,
-                                 "protein_g": f_protein or None,
-                                 "fiber_g": f_fiber or None,
-                                 "sugar_g": f_sugar or None,
-                                 "carbs_g": f_carbs or None,
-                                 "fat_g": f_fat or None,
-                                 "sodium_mg": f_sodium or None, "notes": f_notes})
-            st.success("Saved.")
+                                 "description": f_description, "notes": f_notes, **macro_values})
+            if f_apply_all:
+                bulk_update_food_by_description(f_description, macro_values)
+                st.success("Saved, and updated all previous entries for this food too.")
+            else:
+                st.success("Saved.")
             for k in ["f_desc_select", "f_desc_new", "f_calories", "f_protein", "f_fiber",
-                      "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_notes", "f_last_desc"]:
+                      "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_notes", "f_last_desc", "f_apply_all"]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
