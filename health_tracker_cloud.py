@@ -196,8 +196,56 @@ def pick_or_add(label, options, key):
     return choice or ""
 
 
+FOOD_MACRO_COLS = ["calories", "protein_g", "fiber_g", "sugar_g", "carbs_g", "fat_g", "sodium_mg"]
+FOOD_MACRO_LABELS = {
+    "calories": "Calories", "protein_g": "Protein (g)", "fiber_g": "Fiber (g)",
+    "sugar_g": "Sugar (g)", "carbs_g": "Carbs (g)", "fat_g": "Fat (g)", "sodium_mg": "Sodium (mg)",
+}
+
+
+def render_food_summary(food_df):
+    st.subheader("🍽️ Food Summary")
+    if food_df.empty:
+        st.caption("No food logged yet.")
+        return
+
+    df = food_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    for col in FOOD_MACRO_COLS:
+        if col not in df.columns:
+            df[col] = None
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    daily = df.groupby(df["log_date"].dt.date)[FOOD_MACRO_COLS].sum(min_count=1).reset_index()
+    daily = daily.rename(columns={"log_date": "Date", **FOOD_MACRO_LABELS}).sort_values("Date", ascending=False)
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly = df.groupby("week_start")[FOOD_MACRO_COLS].sum(min_count=1).reset_index()
+    weekly = weekly.rename(columns={"week_start": "Week of", **FOOD_MACRO_LABELS}).sort_values("Week of", ascending=False)
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.dataframe(daily, use_container_width=True, hide_index=True)
+        if len(daily) > 1:
+            st.plotly_chart(
+                px.bar(daily.sort_values("Date"), x="Date", y="Calories", title="Daily Calories"),
+                use_container_width=True,
+            )
+    with weekly_tab:
+        st.dataframe(weekly, use_container_width=True, hide_index=True)
+        if len(weekly) > 1:
+            st.plotly_chart(
+                px.bar(weekly.sort_values("Week of"), x="Week of", y="Calories", title="Weekly Calories"),
+                use_container_width=True,
+            )
+
+
 def delete_row(table, row_id):
     supabase.table(table).delete().eq("id", row_id).eq("user_name", user).execute()
+
+
+def update_row(table, row_id, values: dict):
+    supabase.table(table).update(values).eq("id", row_id).eq("user_name", user).execute()
 
 
 def delete_ui(table, df):
@@ -212,6 +260,50 @@ def delete_ui(table, df):
                 st.rerun()
             else:
                 st.error("That ID isn't in your entries.")
+
+
+def food_edit_ui(df):
+    if df.empty:
+        return
+    with st.expander("Edit a food entry"):
+        row_id = st.number_input("Row ID to edit", min_value=0, step=1, key="edit_food_id")
+        if row_id in df["id"].values:
+            row = df[df["id"] == row_id].iloc[0]
+
+            def cur(col):
+                val = row.get(col)
+                return float(val) if pd.notna(val) else 0.0
+
+            e_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"],
+                                  index=["Breakfast", "Lunch", "Dinner", "Snack"].index(row["meal"])
+                                  if row.get("meal") in ["Breakfast", "Lunch", "Dinner", "Snack"] else 0,
+                                  key="edit_food_meal")
+            e_desc = st.text_input("Description", value=row.get("description", ""), key="edit_food_desc")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                e_cal = st.number_input("Calories", min_value=0.0, step=10.0, value=cur("calories"), key="edit_food_cal")
+                e_protein = st.number_input("Protein (g)", min_value=0.0, step=1.0, value=cur("protein_g"), key="edit_food_protein")
+            with c2:
+                e_fiber = st.number_input("Fiber (g)", min_value=0.0, step=1.0, value=cur("fiber_g"), key="edit_food_fiber")
+                e_carbs = st.number_input("Carbs (g)", min_value=0.0, step=1.0, value=cur("carbs_g"), key="edit_food_carbs")
+            with c3:
+                e_fat = st.number_input("Fat (g)", min_value=0.0, step=1.0, value=cur("fat_g"), key="edit_food_fat")
+                e_sugar = st.number_input("Sugar (g)", min_value=0.0, step=1.0, value=cur("sugar_g"), key="edit_food_sugar")
+            e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
+            e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_food_notes")
+
+            if st.button("Update entry", key="update_food_btn"):
+                update_row("food", int(row_id), {
+                    "meal": e_meal, "description": e_desc,
+                    "calories": e_cal or None, "protein_g": e_protein or None,
+                    "fiber_g": e_fiber or None, "carbs_g": e_carbs or None,
+                    "fat_g": e_fat or None, "sugar_g": e_sugar or None,
+                    "sodium_mg": e_sodium or None, "notes": e_notes,
+                })
+                st.success(f"Updated row {row_id}.")
+                st.rerun()
+        elif row_id:
+            st.error("That ID isn't in your entries.")
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────
@@ -270,9 +362,7 @@ with tabs[0]:
         st.markdown("**Vitamins logged (last 10):**")
         st.dataframe(vitamins_df.head(10), use_container_width=True)
 
-    if not food_df.empty:
-        st.markdown("**Food logged (last 10):**")
-        st.dataframe(food_df.head(10), use_container_width=True)
+    render_food_summary(food_df)
 
 with tabs[1]:
     st.subheader("Log Weight / Measurements")
@@ -360,7 +450,8 @@ with tabs[5]:
         if f_description and st.session_state.get("f_last_desc") != f_description:
             for col, skey in [("calories", "f_calories"), ("protein_g", "f_protein"),
                                ("fiber_g", "f_fiber"), ("sugar_g", "f_sugar"),
-                               ("carbs_g", "f_carbs"), ("fat_g", "f_fat")]:
+                               ("carbs_g", "f_carbs"), ("fat_g", "f_fat"),
+                               ("sodium_mg", "f_sodium")]:
                 past_val = get_last_value("food", "description", f_description, col)
                 if past_val is not None:
                     st.session_state[skey] = float(past_val)
@@ -375,6 +466,7 @@ with tabs[5]:
         f_fat = st.number_input("Fat (g, optional)", min_value=0.0, step=1.0, key="f_fat")
     with c5:
         f_sugar = st.number_input("Sugar (g, optional)", min_value=0.0, step=1.0, key="f_sugar")
+        f_sodium = st.number_input("Sodium (mg, optional)", min_value=0.0, step=10.0, key="f_sodium")
     f_notes = st.text_input("Notes", key="f_notes")
     if st.button("Save", key="f_save"):
         if not f_description:
@@ -387,14 +479,16 @@ with tabs[5]:
                                  "fiber_g": f_fiber or None,
                                  "sugar_g": f_sugar or None,
                                  "carbs_g": f_carbs or None,
-                                 "fat_g": f_fat or None, "notes": f_notes})
+                                 "fat_g": f_fat or None,
+                                 "sodium_mg": f_sodium or None, "notes": f_notes})
             st.success("Saved.")
             for k in ["f_desc_select", "f_desc_new", "f_calories", "f_protein", "f_fiber",
-                      "f_sugar", "f_carbs", "f_fat", "f_notes", "f_last_desc"]:
+                      "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_notes", "f_last_desc"]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
     st.dataframe(df, use_container_width=True)
+    food_edit_ui(df)
     delete_ui("food", df)
 
 with tabs[6]:
