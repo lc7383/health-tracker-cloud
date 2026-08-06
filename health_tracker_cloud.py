@@ -145,7 +145,7 @@ with st.sidebar:
 # ── App layout ───────────────────────────────────────────────────────
 st.title("🩺 Personal Health Tracker (Shared)")
 
-tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "💊 Vitamins"])
+tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "🍽️ Food", "💊 Vitamins"])
 
 with tabs[0]:
     st.subheader("Last 30 Days")
@@ -153,6 +153,7 @@ with tabs[0]:
     exercise_df = read_table("exercise")
     sleep_df = read_table("sleep")
     water_df = read_table("water")
+    food_df = read_table("food")
     vitamins_df = read_table("vitamins")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -188,6 +189,10 @@ with tabs[0]:
     if not vitamins_df.empty:
         st.markdown("**Vitamins logged (last 10):**")
         st.dataframe(vitamins_df.head(10), use_container_width=True)
+
+    if not food_df.empty:
+        st.markdown("**Food logged (last 10):**")
+        st.dataframe(food_df.head(10), use_container_width=True)
 
 with tabs[1]:
     st.subheader("Log Weight / Measurements")
@@ -261,6 +266,27 @@ with tabs[4]:
     delete_ui("water", df)
 
 with tabs[5]:
+    st.subheader("Log Food")
+    with st.form("food_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            f_date = st.date_input("Date", value=date.today(), key="f_date")
+            f_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"])
+        with c2:
+            f_description = st.text_input("What did you eat?")
+            f_calories = st.number_input("Calories (optional)", min_value=0.0, step=10.0)
+        f_notes = st.text_input("Notes", key="f_notes")
+        if st.form_submit_button("Save"):
+            insert_row("food", {"log_date": str(f_date), "meal": f_meal,
+                                 "description": f_description,
+                                 "calories": f_calories or None, "notes": f_notes})
+            st.success("Saved.")
+            st.rerun()
+    df = read_table("food")
+    st.dataframe(df, use_container_width=True)
+    delete_ui("food", df)
+
+with tabs[6]:
     st.subheader("Log Vitamins / Supplements")
     with st.form("vitamins_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
