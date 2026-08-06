@@ -399,18 +399,80 @@ def render_sleep_summary(sleep_df):
     daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
     with daily_tab:
         st.dataframe(daily, use_container_width=True, hide_index=True)
-        if len(daily) > 1:
-            st.plotly_chart(
-                px.bar(daily.sort_values("Date"), x="Date", y="Total Hours", title="Daily Sleep Hours"),
-                use_container_width=True,
-            )
     with weekly_tab:
         st.dataframe(weekly, use_container_width=True, hide_index=True)
-        if len(weekly) > 1:
-            st.plotly_chart(
-                px.bar(weekly.sort_values("Week of"), x="Week of", y="Total Hours", title="Weekly Sleep Hours"),
-                use_container_width=True,
-            )
+
+
+def render_symptoms_summary(symptoms_df):
+    st.subheader("🩹 Symptoms Summary")
+    if symptoms_df.empty:
+        st.caption("No symptoms logged yet.")
+        return
+
+    df = symptoms_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    df["severity"] = pd.to_numeric(df["severity"], errors="coerce")
+    df["symptom"] = df["symptom"].fillna("(unspecified)")
+
+    daily = (
+        df.groupby([df["log_date"].dt.date, "symptom"])
+        .agg(Occurrences=("symptom", "count"), **{"Avg Severity": ("severity", "mean")})
+        .reset_index()
+        .rename(columns={"log_date": "Date", "symptom": "Symptom"})
+        .sort_values(["Date", "Symptom"], ascending=[False, True])
+    )
+    daily["Avg Severity"] = daily["Avg Severity"].round(1)
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly = (
+        df.groupby(["week_start", "symptom"])
+        .agg(Occurrences=("symptom", "count"), **{"Avg Severity": ("severity", "mean")})
+        .reset_index()
+        .rename(columns={"week_start": "Week of", "symptom": "Symptom"})
+        .sort_values(["Week of", "Symptom"], ascending=[False, True])
+    )
+    weekly["Avg Severity"] = weekly["Avg Severity"].round(1)
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.dataframe(daily, use_container_width=True, hide_index=True)
+    with weekly_tab:
+        st.dataframe(weekly, use_container_width=True, hide_index=True)
+
+
+def render_self_care_summary(self_care_df):
+    st.subheader("🧘 Self-Care Summary")
+    if self_care_df.empty:
+        st.caption("No self-care logged yet.")
+        return
+
+    df = self_care_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    df["duration_min"] = pd.to_numeric(df["duration_min"], errors="coerce")
+    df["activity"] = df["activity"].fillna("(unspecified)")
+
+    daily = (
+        df.groupby([df["log_date"].dt.date, "activity"])["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"log_date": "Date", "activity": "Activity"})
+        .sort_values(["Date", "Activity"], ascending=[False, True])
+    )
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly = (
+        df.groupby(["week_start", "activity"])["duration_min"]
+        .agg(Sessions="count", **{"Total Minutes": "sum"})
+        .reset_index()
+        .rename(columns={"week_start": "Week of", "activity": "Activity"})
+        .sort_values(["Week of", "Activity"], ascending=[False, True])
+    )
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.dataframe(daily, use_container_width=True, hide_index=True)
+    with weekly_tab:
+        st.dataframe(weekly, use_container_width=True, hide_index=True)
 
 
 def delete_row(table, row_id):
@@ -498,6 +560,54 @@ def food_edit_ui(df):
             st.error("That ID isn't in your entries.")
 
 
+def symptom_edit_ui(df):
+    if df.empty:
+        return
+    with st.expander("Edit a symptom entry (e.g. fill in end time)"):
+        row_id = st.number_input("Row ID to edit", min_value=0, step=1, key="edit_sym_id")
+
+        if st.session_state.get("edit_sym_loaded_id") != row_id:
+            for k in ["edit_sym_symptom", "edit_sym_severity", "edit_sym_start",
+                      "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes"]:
+                st.session_state.pop(k, None)
+            st.session_state["edit_sym_loaded_id"] = row_id
+
+        if row_id in df["id"].values:
+            row = df[df["id"] == row_id].iloc[0]
+
+            def parse_time(val):
+                if not val:
+                    return datetime.now().time()
+                try:
+                    return datetime.strptime(str(val)[:5], "%H:%M").time()
+                except ValueError:
+                    return datetime.now().time()
+
+            e_symptom = st.text_input("Symptom", value=row.get("symptom", ""), key="edit_sym_symptom")
+            e_severity = st.slider("Severity (1-5)", 1, 5,
+                                   int(row["severity"]) if pd.notna(row.get("severity")) else 3,
+                                   key="edit_sym_severity")
+            e_start = st.time_input("Start time", value=parse_time(row.get("start_time")), key="edit_sym_start")
+            e_has_ended = st.checkbox("Has it ended?", value=bool(row.get("end_time")), key="edit_sym_has_ended")
+            e_end = st.time_input("End time", value=parse_time(row.get("end_time")), key="edit_sym_end") if e_has_ended else None
+            e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_sym_notes")
+
+            if st.button("Update entry", key="update_sym_btn"):
+                update_row("symptoms", int(row_id), {
+                    "symptom": e_symptom, "severity": e_severity,
+                    "start_time": e_start.strftime("%H:%M") if e_start else None,
+                    "end_time": e_end.strftime("%H:%M") if e_end else None,
+                    "notes": e_notes,
+                })
+                st.success(f"Updated row {row_id}.")
+                for k in ["edit_sym_symptom", "edit_sym_severity", "edit_sym_start",
+                          "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes", "edit_sym_loaded_id"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        elif row_id:
+            st.error("That ID isn't in your entries.")
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(f"**Logged in as:** {user}")
@@ -511,7 +621,7 @@ with st.sidebar:
 # ── App layout ───────────────────────────────────────────────────────
 st.title("🩺 Personal Health Tracker (Shared)")
 
-tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "🍽️ Food", "💊 Vitamins"])
+tabs = st.tabs(["📊 Dashboard", "⚖️ Weight", "🏃 Exercise", "😴 Sleep", "💧 Water", "🍽️ Food", "💊 Vitamins", "🩹 Symptoms", "🧘 Self-Care"])
 
 with tabs[0]:
     st.subheader("Last 30 Days")
@@ -521,6 +631,8 @@ with tabs[0]:
     water_df = read_table("water")
     food_df = read_table("food")
     vitamins_df = read_table("vitamins")
+    symptoms_df = read_table("symptoms")
+    self_care_df = read_table("self_care")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -553,6 +665,8 @@ with tabs[0]:
     render_food_summary(food_df)
     render_exercise_summary(exercise_df)
     render_sleep_summary(sleep_df)
+    render_symptoms_summary(symptoms_df)
+    render_self_care_summary(self_care_df)
 
 with tabs[1]:
     st.subheader("Log Weight / Measurements")
@@ -715,3 +829,60 @@ with tabs[6]:
     df = read_table("vitamins")
     st.dataframe(df, use_container_width=True)
     delete_ui("vitamins", df)
+
+with tabs[7]:
+    st.subheader("Log a Symptom")
+    c1, c2 = st.columns(2)
+    with c1:
+        s_date = st.date_input("Date", value=date.today(), key="sym_date")
+        s_symptom = pick_or_add("Symptom", get_distinct_values("symptoms", "symptom"), "sym_name")
+        s_start = st.time_input("Start time", value=datetime.now().time(), key="sym_start")
+    with c2:
+        s_severity = st.slider("Severity (1-5)", 1, 5, 3, key="sym_severity")
+        s_has_ended = st.checkbox("Has it ended already?", key="sym_has_ended")
+        s_end = st.time_input("End time", value=datetime.now().time(), key="sym_end") if s_has_ended else None
+    s_notes = st.text_input("Notes (e.g. what triggered it)", key="sym_notes")
+    if st.button("Save", key="sym_save"):
+        if not s_symptom:
+            st.error("Please select or add a symptom.")
+        else:
+            insert_row("symptoms", {"log_date": str(s_date), "symptom": s_symptom,
+                                     "severity": s_severity,
+                                     "start_time": s_start.strftime("%H:%M") if s_start else None,
+                                     "end_time": s_end.strftime("%H:%M") if s_end else None,
+                                     "notes": s_notes})
+            st.success("Saved.")
+            for k in ["sym_name_select", "sym_name_new", "sym_severity", "sym_notes",
+                      "sym_start", "sym_end", "sym_has_ended"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    df = read_table("symptoms")
+    st.dataframe(df, use_container_width=True)
+    symptom_edit_ui(df)
+    delete_ui("symptoms", df)
+
+with tabs[8]:
+    st.subheader("Log Self-Care")
+    c1, c2 = st.columns(2)
+    with c1:
+        sc_date = st.date_input("Date", value=date.today(), key="sc_date")
+        sc_activity = pick_or_add("Activity (e.g. Massage, Meditation, Spa Day)",
+                                   get_distinct_values("self_care", "activity"), "sc_activity")
+    with c2:
+        sc_duration = st.number_input("Duration (minutes, optional)", min_value=0.0, step=5.0, key="sc_duration")
+    sc_notes = st.text_input("Notes", key="sc_notes")
+    if st.button("Save", key="sc_save"):
+        if not sc_activity:
+            st.error("Please select or add an activity.")
+        else:
+            insert_row("self_care", {"log_date": str(sc_date), "activity": sc_activity,
+                                      "duration_min": sc_duration or None, "notes": sc_notes})
+            st.success("Saved.")
+            for k in ["sc_activity_select", "sc_activity_new", "sc_duration", "sc_notes"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    df = read_table("self_care")
+    st.dataframe(df, use_container_width=True)
+    delete_ui("self_care", df)
