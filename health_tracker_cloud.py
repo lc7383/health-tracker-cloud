@@ -252,10 +252,11 @@ def pick_or_add(label, options, key):
     return choice or ""
 
 
-FOOD_MACRO_COLS = ["calories", "protein_g", "fiber_g", "sugar_g", "carbs_g", "fat_g", "sodium_mg"]
+FOOD_MACRO_COLS = ["calories", "protein_g", "fiber_g", "sugar_g", "carbs_g", "fat_g", "sodium_mg", "ww_points"]
 FOOD_MACRO_LABELS = {
     "calories": "Calories", "protein_g": "Protein (g)", "fiber_g": "Fiber (g)",
     "sugar_g": "Sugar (g)", "carbs_g": "Carbs (g)", "fat_g": "Fat (g)", "sodium_mg": "Sodium (mg)",
+    "ww_points": "WW Points",
 }
 
 
@@ -512,7 +513,7 @@ def food_edit_ui(df):
         if st.session_state.get("edit_food_loaded_id") != row_id:
             for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
                       "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
-                      "edit_food_sodium", "edit_food_notes"]:
+                      "edit_food_sodium", "edit_food_ww", "edit_food_notes"]:
                 st.session_state.pop(k, None)
             st.session_state["edit_food_loaded_id"] = row_id
 
@@ -538,7 +539,11 @@ def food_edit_ui(df):
             with c3:
                 e_fat = st.number_input("Fat (g)", min_value=0.0, step=1.0, value=cur("fat_g"), key="edit_food_fat")
                 e_sugar = st.number_input("Sugar (g)", min_value=0.0, step=1.0, value=cur("sugar_g"), key="edit_food_sugar")
-            e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
+            c4, c5 = st.columns(2)
+            with c4:
+                e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
+            with c5:
+                e_ww = st.number_input("WW Points", min_value=0.0, step=1.0, value=cur("ww_points"), key="edit_food_ww")
             e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_food_notes")
 
             st.caption("This updates the existing entry in place — it will NOT create a new food log entry.")
@@ -548,12 +553,12 @@ def food_edit_ui(df):
                     "calories": e_cal or None, "protein_g": e_protein or None,
                     "fiber_g": e_fiber or None, "carbs_g": e_carbs or None,
                     "fat_g": e_fat or None, "sugar_g": e_sugar or None,
-                    "sodium_mg": e_sodium or None, "notes": e_notes,
+                    "sodium_mg": e_sodium or None, "ww_points": e_ww or None, "notes": e_notes,
                 })
                 st.success(f"Updated row {row_id}.")
                 for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
                           "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
-                          "edit_food_sodium", "edit_food_notes", "edit_food_loaded_id"]:
+                          "edit_food_sodium", "edit_food_ww", "edit_food_notes", "edit_food_loaded_id"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         elif row_id:
@@ -755,10 +760,9 @@ with tabs[5]:
             for col, skey in [("calories", "f_calories"), ("protein_g", "f_protein"),
                                ("fiber_g", "f_fiber"), ("sugar_g", "f_sugar"),
                                ("carbs_g", "f_carbs"), ("fat_g", "f_fat"),
-                               ("sodium_mg", "f_sodium")]:
+                               ("sodium_mg", "f_sodium"), ("ww_points", "f_ww_points")]:
                 past_val = get_last_value("food", "description", f_description, col)
-                if past_val is not None:
-                    st.session_state[skey] = float(past_val)
+                st.session_state[skey] = float(past_val) if past_val is not None else 0.0
             st.session_state["f_last_desc"] = f_description
         f_calories = st.number_input("Calories (optional)", min_value=0.0, step=10.0, key="f_calories")
     c3, c4, c5 = st.columns(3)
@@ -771,6 +775,7 @@ with tabs[5]:
     with c5:
         f_sugar = st.number_input("Sugar (g, optional)", min_value=0.0, step=1.0, key="f_sugar")
         f_sodium = st.number_input("Sodium (mg, optional)", min_value=0.0, step=10.0, key="f_sodium")
+    f_ww_points = st.number_input("WW Points (optional)", min_value=0.0, step=1.0, key="f_ww_points")
     f_notes = st.text_input("Notes", key="f_notes")
     f_apply_all = st.checkbox(
         "Also fix all previous entries of this food with these values",
@@ -789,6 +794,7 @@ with tabs[5]:
                 "carbs_g": f_carbs or None,
                 "fat_g": f_fat or None,
                 "sodium_mg": f_sodium or None,
+                "ww_points": f_ww_points or None,
             }
             insert_row("food", {"log_date": str(f_date), "meal": f_meal,
                                  "description": f_description, "notes": f_notes, **macro_values})
@@ -798,7 +804,8 @@ with tabs[5]:
             else:
                 st.success("Saved.")
             for k in ["f_desc_select", "f_desc_new", "f_calories", "f_protein", "f_fiber",
-                      "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_notes", "f_last_desc", "f_apply_all"]:
+                      "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_ww_points", "f_notes",
+                      "f_last_desc", "f_apply_all"]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
