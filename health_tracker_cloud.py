@@ -283,11 +283,6 @@ def render_food_summary(food_df):
     daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
     with daily_tab:
         st.dataframe(daily, use_container_width=True, hide_index=True)
-        if len(daily) > 1:
-            st.plotly_chart(
-                px.bar(daily.sort_values("Date"), x="Date", y="Calories", title="Daily Calories"),
-                use_container_width=True,
-            )
     with weekly_tab:
         st.dataframe(weekly, use_container_width=True, hide_index=True)
         if len(weekly) > 1:
@@ -348,11 +343,6 @@ def render_exercise_summary(exercise_df):
     with daily_tab:
         st.markdown("**Total (all activities):**")
         st.dataframe(daily_total, use_container_width=True, hide_index=True)
-        if len(daily_total) > 1:
-            st.plotly_chart(
-                px.bar(daily_total.sort_values("Date"), x="Date", y="Total Minutes", title="Daily Exercise Minutes"),
-                use_container_width=True,
-            )
         st.markdown("**Breakdown by activity & intensity:**")
         st.dataframe(daily_breakdown, use_container_width=True, hide_index=True)
     with weekly_tab:
@@ -511,7 +501,7 @@ def food_edit_ui(df):
 
         # If the selected row changed, clear stale widget values so fields reload fresh
         if st.session_state.get("edit_food_loaded_id") != row_id:
-            for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+            for k in ["edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
                       "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
                       "edit_food_sodium", "edit_food_ww", "edit_food_notes"]:
                 st.session_state.pop(k, None)
@@ -524,10 +514,19 @@ def food_edit_ui(df):
                 val = row.get(col)
                 return float(val) if pd.notna(val) else 0.0
 
+            def parse_time(val):
+                if not val:
+                    return datetime.now().time()
+                try:
+                    return datetime.strptime(str(val)[:5], "%H:%M").time()
+                except ValueError:
+                    return datetime.now().time()
+
             e_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"],
                                   index=["Breakfast", "Lunch", "Dinner", "Snack"].index(row["meal"])
                                   if row.get("meal") in ["Breakfast", "Lunch", "Dinner", "Snack"] else 0,
                                   key="edit_food_meal")
+            e_time = st.time_input("Time", value=parse_time(row.get("meal_time")), key="edit_food_time")
             e_desc = st.text_input("Description", value=row.get("description", ""), key="edit_food_desc")
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -549,14 +548,15 @@ def food_edit_ui(df):
             st.caption("This updates the existing entry in place — it will NOT create a new food log entry.")
             if st.button("Update entry", key="update_food_btn"):
                 update_row("food", int(row_id), {
-                    "meal": e_meal, "description": e_desc,
+                    "meal": e_meal, "meal_time": e_time.strftime("%H:%M") if e_time else None,
+                    "description": e_desc,
                     "calories": e_cal or None, "protein_g": e_protein or None,
                     "fiber_g": e_fiber or None, "carbs_g": e_carbs or None,
                     "fat_g": e_fat or None, "sugar_g": e_sugar or None,
                     "sodium_mg": e_sodium or None, "ww_points": e_ww or None, "notes": e_notes,
                 })
                 st.success(f"Updated row {row_id}.")
-                for k in ["edit_food_meal", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+                for k in ["edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
                           "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
                           "edit_food_sodium", "edit_food_ww", "edit_food_notes", "edit_food_loaded_id"]:
                     st.session_state.pop(k, None)
@@ -653,16 +653,6 @@ with tabs[0]:
         avg_water = water_df["ounces"].mean() if not water_df.empty else None
         st.metric("Avg Water", f"{avg_water:.0f} oz" if avg_water else "—")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if not weight_df.empty:
-            st.plotly_chart(px.line(weight_df.sort_values("log_date"), x="log_date", y="weight_lbs",
-                                     title="Weight Trend", markers=True), use_container_width=True)
-    with c2:
-        if not water_df.empty:
-            st.plotly_chart(px.bar(water_df.sort_values("log_date"), x="log_date", y="ounces",
-                                    title="Water by Day"), use_container_width=True)
-
     if not vitamins_df.empty:
         st.markdown("**Vitamins logged (last 10):**")
         st.dataframe(vitamins_df.head(10), use_container_width=True)
@@ -754,6 +744,7 @@ with tabs[5]:
     with c1:
         f_date = st.date_input("Date", value=date.today(), key="f_date")
         f_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"], key="f_meal")
+        f_time = st.time_input("Time", value=datetime.now().time(), key="f_time")
     with c2:
         f_description = pick_or_add("Description", get_distinct_values("food", "description"), "f_desc")
         if f_description and st.session_state.get("f_last_desc") != f_description:
@@ -797,6 +788,7 @@ with tabs[5]:
                 "ww_points": f_ww_points or None,
             }
             insert_row("food", {"log_date": str(f_date), "meal": f_meal,
+                                 "meal_time": f_time.strftime("%H:%M") if f_time else None,
                                  "description": f_description, "notes": f_notes, **macro_values})
             if f_apply_all:
                 bulk_update_food_by_description(f_description, macro_values)
@@ -805,7 +797,7 @@ with tabs[5]:
                 st.success("Saved.")
             for k in ["f_desc_select", "f_desc_new", "f_calories", "f_protein", "f_fiber",
                       "f_sugar", "f_carbs", "f_fat", "f_sodium", "f_ww_points", "f_notes",
-                      "f_last_desc", "f_apply_all"]:
+                      "f_time", "f_last_desc", "f_apply_all"]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
