@@ -260,6 +260,41 @@ FOOD_MACRO_LABELS = {
 }
 
 
+def render_water_summary(water_df):
+    st.subheader("💧 Water Summary")
+    if water_df.empty:
+        st.caption("No water logged yet.")
+        return
+
+    df = water_df.copy()
+    df["log_date"] = pd.to_datetime(df["log_date"])
+    df["ounces"] = pd.to_numeric(df["ounces"], errors="coerce")
+
+    daily = (
+        df.groupby(df["log_date"].dt.date)["ounces"]
+        .agg(Entries="count", **{"Total Ounces": "sum"})
+        .reset_index()
+        .rename(columns={"log_date": "Date"})
+        .sort_values("Date", ascending=False)
+    )
+
+    df["week_start"] = (df["log_date"] - pd.to_timedelta(df["log_date"].dt.weekday, unit="D")).dt.date
+    weekly = (
+        df.groupby("week_start")["ounces"]
+        .agg(Entries="count", **{"Total Ounces": "sum"})
+        .reset_index()
+        .rename(columns={"week_start": "Week of"})
+        .sort_values("Week of", ascending=False)
+    )
+    weekly["Avg Ounces/Day"] = (weekly["Total Ounces"] / 7).round(0)
+
+    daily_tab, weekly_tab = st.tabs(["Daily Totals", "Weekly Totals"])
+    with daily_tab:
+        st.dataframe(daily, use_container_width=True, hide_index=True)
+    with weekly_tab:
+        st.dataframe(weekly, use_container_width=True, hide_index=True)
+
+
 def render_food_summary(food_df):
     st.subheader("🍽️ Food Summary")
     if food_df.empty:
@@ -479,138 +514,143 @@ def bulk_update_food_by_description(description, values: dict):
     supabase.table("food").update(values).eq("user_name", user).eq("description", description).execute()
 
 
-def delete_ui(table, df):
+def display_table(table, df, edit_fn=None):
+    """Shows the table with row selection built in. Selecting a row shows an edit form
+    (if edit_fn is provided) and a Delete button, all tied to the same selection."""
     if df.empty:
+        st.dataframe(df, use_container_width=True)
         return
-    with st.expander("Delete an entry"):
-        row_id = st.number_input(f"Row ID to delete ({table})", min_value=0, step=1, key=f"del_{table}")
-        if st.button("Delete", key=f"del_btn_{table}"):
-            if row_id in df["id"].values:
-                delete_row(table, int(row_id))
-                st.success(f"Deleted row {row_id}.")
-                st.rerun()
-            else:
-                st.error("That ID isn't in your entries.")
-
-
-def food_edit_ui(df):
-    if df.empty:
+    event = st.dataframe(
+        df, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row", key=f"select_{table}",
+    )
+    selected_rows = event.selection.rows if event and event.selection else []
+    if not selected_rows:
         return
-    with st.expander("Edit a food entry"):
-        row_id = st.number_input("Row ID to edit", min_value=0, step=1, key="edit_food_id")
 
-        # If the selected row changed, clear stale widget values so fields reload fresh
-        if st.session_state.get("edit_food_loaded_id") != row_id:
-            for k in ["edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+    selected_id = int(df.iloc[selected_rows[0]]["id"])
+    row = df.iloc[selected_rows[0]]
+    st.markdown(f"**Row {selected_id} selected:**")
+
+    if edit_fn:
+        edit_fn(table, selected_id, row)
+
+    if st.button("🗑️ Delete selected row", key=f"delbtn_{table}"):
+        delete_row(table, selected_id)
+        st.success(f"Deleted row {selected_id}.")
+        st.rerun()
+
+
+def food_edit_fields(table, row_id, row):
+    # If the selection changed since last render, clear stale widget values
+    if st.session_state.get("edit_food_loaded_id") != row_id:
+        for k in ["edit_food_date", "edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
+                  "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
+                  "edit_food_sodium", "edit_food_ww", "edit_food_notes"]:
+            st.session_state.pop(k, None)
+        st.session_state["edit_food_loaded_id"] = row_id
+
+    def cur(col):
+        val = row.get(col)
+        return float(val) if pd.notna(val) else 0.0
+
+    def parse_time(val):
+        if not val:
+            return datetime.now().time()
+        try:
+            return datetime.strptime(str(val)[:5], "%H:%M").time()
+        except ValueError:
+            return datetime.now().time()
+
+    def parse_date(val):
+        if not val:
+            return date.today()
+        try:
+            return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return date.today()
+
+    with st.expander("Edit this food entry", expanded=True):
+        e_date = st.date_input("Date", value=parse_date(row.get("log_date")), key="edit_food_date")
+        e_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"],
+                              index=["Breakfast", "Lunch", "Dinner", "Snack"].index(row["meal"])
+                              if row.get("meal") in ["Breakfast", "Lunch", "Dinner", "Snack"] else 0,
+                              key="edit_food_meal")
+        e_time = st.time_input("Time", value=parse_time(row.get("meal_time")), key="edit_food_time")
+        e_desc = st.text_input("Description", value=row.get("description", ""), key="edit_food_desc")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            e_cal = st.number_input("Calories", min_value=0.0, step=10.0, value=cur("calories"), key="edit_food_cal")
+            e_protein = st.number_input("Protein (g)", min_value=0.0, step=1.0, value=cur("protein_g"), key="edit_food_protein")
+        with c2:
+            e_fiber = st.number_input("Fiber (g)", min_value=0.0, step=1.0, value=cur("fiber_g"), key="edit_food_fiber")
+            e_carbs = st.number_input("Carbs (g)", min_value=0.0, step=1.0, value=cur("carbs_g"), key="edit_food_carbs")
+        with c3:
+            e_fat = st.number_input("Fat (g)", min_value=0.0, step=1.0, value=cur("fat_g"), key="edit_food_fat")
+            e_sugar = st.number_input("Sugar (g)", min_value=0.0, step=1.0, value=cur("sugar_g"), key="edit_food_sugar")
+        c4, c5 = st.columns(2)
+        with c4:
+            e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
+        with c5:
+            e_ww = st.number_input("WW Points", min_value=0.0, step=1.0, value=cur("ww_points"), key="edit_food_ww")
+        e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_food_notes")
+
+        st.caption("This updates the existing entry in place — it will NOT create a new food log entry.")
+        if st.button("Update entry", key="update_food_btn"):
+            update_row("food", row_id, {
+                "log_date": str(e_date), "meal": e_meal,
+                "meal_time": e_time.strftime("%H:%M") if e_time else None,
+                "description": e_desc,
+                "calories": e_cal or None, "protein_g": e_protein or None,
+                "fiber_g": e_fiber or None, "carbs_g": e_carbs or None,
+                "fat_g": e_fat or None, "sugar_g": e_sugar or None,
+                "sodium_mg": e_sodium or None, "ww_points": e_ww or None, "notes": e_notes,
+            })
+            st.success(f"Updated row {row_id}.")
+            for k in ["edit_food_date", "edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
                       "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
-                      "edit_food_sodium", "edit_food_ww", "edit_food_notes"]:
+                      "edit_food_sodium", "edit_food_ww", "edit_food_notes", "edit_food_loaded_id"]:
                 st.session_state.pop(k, None)
-            st.session_state["edit_food_loaded_id"] = row_id
-
-        if row_id in df["id"].values:
-            row = df[df["id"] == row_id].iloc[0]
-
-            def cur(col):
-                val = row.get(col)
-                return float(val) if pd.notna(val) else 0.0
-
-            def parse_time(val):
-                if not val:
-                    return datetime.now().time()
-                try:
-                    return datetime.strptime(str(val)[:5], "%H:%M").time()
-                except ValueError:
-                    return datetime.now().time()
-
-            e_meal = st.selectbox("Meal", ["Breakfast", "Lunch", "Dinner", "Snack"],
-                                  index=["Breakfast", "Lunch", "Dinner", "Snack"].index(row["meal"])
-                                  if row.get("meal") in ["Breakfast", "Lunch", "Dinner", "Snack"] else 0,
-                                  key="edit_food_meal")
-            e_time = st.time_input("Time", value=parse_time(row.get("meal_time")), key="edit_food_time")
-            e_desc = st.text_input("Description", value=row.get("description", ""), key="edit_food_desc")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                e_cal = st.number_input("Calories", min_value=0.0, step=10.0, value=cur("calories"), key="edit_food_cal")
-                e_protein = st.number_input("Protein (g)", min_value=0.0, step=1.0, value=cur("protein_g"), key="edit_food_protein")
-            with c2:
-                e_fiber = st.number_input("Fiber (g)", min_value=0.0, step=1.0, value=cur("fiber_g"), key="edit_food_fiber")
-                e_carbs = st.number_input("Carbs (g)", min_value=0.0, step=1.0, value=cur("carbs_g"), key="edit_food_carbs")
-            with c3:
-                e_fat = st.number_input("Fat (g)", min_value=0.0, step=1.0, value=cur("fat_g"), key="edit_food_fat")
-                e_sugar = st.number_input("Sugar (g)", min_value=0.0, step=1.0, value=cur("sugar_g"), key="edit_food_sugar")
-            c4, c5 = st.columns(2)
-            with c4:
-                e_sodium = st.number_input("Sodium (mg)", min_value=0.0, step=10.0, value=cur("sodium_mg"), key="edit_food_sodium")
-            with c5:
-                e_ww = st.number_input("WW Points", min_value=0.0, step=1.0, value=cur("ww_points"), key="edit_food_ww")
-            e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_food_notes")
-
-            st.caption("This updates the existing entry in place — it will NOT create a new food log entry.")
-            if st.button("Update entry", key="update_food_btn"):
-                update_row("food", int(row_id), {
-                    "meal": e_meal, "meal_time": e_time.strftime("%H:%M") if e_time else None,
-                    "description": e_desc,
-                    "calories": e_cal or None, "protein_g": e_protein or None,
-                    "fiber_g": e_fiber or None, "carbs_g": e_carbs or None,
-                    "fat_g": e_fat or None, "sugar_g": e_sugar or None,
-                    "sodium_mg": e_sodium or None, "ww_points": e_ww or None, "notes": e_notes,
-                })
-                st.success(f"Updated row {row_id}.")
-                for k in ["edit_food_meal", "edit_food_time", "edit_food_desc", "edit_food_cal", "edit_food_protein",
-                          "edit_food_fiber", "edit_food_carbs", "edit_food_fat", "edit_food_sugar",
-                          "edit_food_sodium", "edit_food_ww", "edit_food_notes", "edit_food_loaded_id"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        elif row_id:
-            st.error("That ID isn't in your entries.")
+            st.rerun()
 
 
-def symptom_edit_ui(df):
-    if df.empty:
-        return
-    with st.expander("Edit a symptom entry (e.g. fill in end time)"):
-        row_id = st.number_input("Row ID to edit", min_value=0, step=1, key="edit_sym_id")
+def symptom_edit_fields(table, row_id, row):
+    if st.session_state.get("edit_sym_loaded_id") != row_id:
+        for k in ["edit_sym_symptom", "edit_sym_severity", "edit_sym_start",
+                  "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes"]:
+            st.session_state.pop(k, None)
+        st.session_state["edit_sym_loaded_id"] = row_id
 
-        if st.session_state.get("edit_sym_loaded_id") != row_id:
+    def parse_time(val):
+        if not val:
+            return datetime.now().time()
+        try:
+            return datetime.strptime(str(val)[:5], "%H:%M").time()
+        except ValueError:
+            return datetime.now().time()
+
+    with st.expander("Edit this symptom entry (e.g. fill in end time)", expanded=True):
+        e_symptom = st.text_input("Symptom", value=row.get("symptom", ""), key="edit_sym_symptom")
+        e_severity = st.slider("Severity (1-5)", 1, 5,
+                               int(row["severity"]) if pd.notna(row.get("severity")) else 3,
+                               key="edit_sym_severity")
+        e_start = st.time_input("Start time", value=parse_time(row.get("start_time")), key="edit_sym_start")
+        e_has_ended = st.checkbox("Has it ended?", value=bool(row.get("end_time")), key="edit_sym_has_ended")
+        e_end = st.time_input("End time", value=parse_time(row.get("end_time")), key="edit_sym_end") if e_has_ended else None
+        e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_sym_notes")
+
+        if st.button("Update entry", key="update_sym_btn"):
+            update_row("symptoms", row_id, {
+                "symptom": e_symptom, "severity": e_severity,
+                "start_time": e_start.strftime("%H:%M") if e_start else None,
+                "end_time": e_end.strftime("%H:%M") if e_end else None,
+                "notes": e_notes,
+            })
+            st.success(f"Updated row {row_id}.")
             for k in ["edit_sym_symptom", "edit_sym_severity", "edit_sym_start",
-                      "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes"]:
+                      "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes", "edit_sym_loaded_id"]:
                 st.session_state.pop(k, None)
-            st.session_state["edit_sym_loaded_id"] = row_id
-
-        if row_id in df["id"].values:
-            row = df[df["id"] == row_id].iloc[0]
-
-            def parse_time(val):
-                if not val:
-                    return datetime.now().time()
-                try:
-                    return datetime.strptime(str(val)[:5], "%H:%M").time()
-                except ValueError:
-                    return datetime.now().time()
-
-            e_symptom = st.text_input("Symptom", value=row.get("symptom", ""), key="edit_sym_symptom")
-            e_severity = st.slider("Severity (1-5)", 1, 5,
-                                   int(row["severity"]) if pd.notna(row.get("severity")) else 3,
-                                   key="edit_sym_severity")
-            e_start = st.time_input("Start time", value=parse_time(row.get("start_time")), key="edit_sym_start")
-            e_has_ended = st.checkbox("Has it ended?", value=bool(row.get("end_time")), key="edit_sym_has_ended")
-            e_end = st.time_input("End time", value=parse_time(row.get("end_time")), key="edit_sym_end") if e_has_ended else None
-            e_notes = st.text_input("Notes", value=row.get("notes", "") or "", key="edit_sym_notes")
-
-            if st.button("Update entry", key="update_sym_btn"):
-                update_row("symptoms", int(row_id), {
-                    "symptom": e_symptom, "severity": e_severity,
-                    "start_time": e_start.strftime("%H:%M") if e_start else None,
-                    "end_time": e_end.strftime("%H:%M") if e_end else None,
-                    "notes": e_notes,
-                })
-                st.success(f"Updated row {row_id}.")
-                for k in ["edit_sym_symptom", "edit_sym_severity", "edit_sym_start",
-                          "edit_sym_has_ended", "edit_sym_end", "edit_sym_notes", "edit_sym_loaded_id"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        elif row_id:
-            st.error("That ID isn't in your entries.")
+            st.rerun()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────
@@ -657,6 +697,7 @@ with tabs[0]:
         st.markdown("**Vitamins logged (last 10):**")
         st.dataframe(vitamins_df.head(10), use_container_width=True)
 
+    render_water_summary(water_df)
     render_food_summary(food_df)
     render_exercise_summary(exercise_df)
     render_sleep_summary(sleep_df)
@@ -679,8 +720,7 @@ with tabs[1]:
             st.success("Saved.")
             st.rerun()
     df = read_table("weight")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("weight", df)
+    display_table("weight", df)
 
 with tabs[2]:
     st.subheader("Log Exercise")
@@ -703,8 +743,7 @@ with tabs[2]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("exercise")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("exercise", df)
+    display_table("exercise", df)
 
 with tabs[3]:
     st.subheader("Log Sleep")
@@ -722,8 +761,7 @@ with tabs[3]:
             st.success("Saved.")
             st.rerun()
     df = read_table("sleep")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("sleep", df)
+    display_table("sleep", df)
 
 with tabs[4]:
     st.subheader("Log Water Intake")
@@ -735,8 +773,7 @@ with tabs[4]:
             st.success("Saved.")
             st.rerun()
     df = read_table("water")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("water", df)
+    display_table("water", df)
 
 with tabs[5]:
     st.subheader("Log Food")
@@ -801,9 +838,7 @@ with tabs[5]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("food")
-    st.dataframe(df, use_container_width=True)
-    food_edit_ui(df)
-    delete_ui("food", df)
+    display_table("food", df, edit_fn=food_edit_fields)
 
 with tabs[6]:
     st.subheader("Log Vitamins / Supplements")
@@ -826,8 +861,7 @@ with tabs[6]:
                 st.session_state.pop(k, None)
             st.rerun()
     df = read_table("vitamins")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("vitamins", df)
+    display_table("vitamins", df)
 
 with tabs[7]:
     st.subheader("Log a Symptom")
@@ -857,9 +891,7 @@ with tabs[7]:
             st.rerun()
 
     df = read_table("symptoms")
-    st.dataframe(df, use_container_width=True)
-    symptom_edit_ui(df)
-    delete_ui("symptoms", df)
+    display_table("symptoms", df, edit_fn=symptom_edit_fields)
 
 with tabs[8]:
     st.subheader("Log Self-Care")
@@ -883,8 +915,7 @@ with tabs[8]:
             st.rerun()
 
     df = read_table("self_care")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("self_care", df)
+    display_table("self_care", df)
 
 with tabs[9]:
     st.subheader("Log a Health Visit")
@@ -931,5 +962,4 @@ with tabs[9]:
             )
 
     st.markdown("**All visits:**")
-    st.dataframe(df, use_container_width=True)
-    delete_ui("health_visits", df)
+    display_table("health_visits", df)
